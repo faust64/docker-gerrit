@@ -1,0 +1,316 @@
+apiVersion: v1
+kind: Template
+labels:
+  app: gerrit
+  template: gerrit-jenkins-pipeline
+metadata:
+  annotations:
+    description: Gerrit - Jenkinsfile
+      see https://github.com/faust64weet/docker-gerrit
+    iconClass: icon-openshift
+    openshift.io/display-name: Gerrit CI
+    tags: gerrit
+  name: gerrit-jenkins-pipeline
+objects:
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      description: Tests Gerrit images
+    name: gerrit-jenkins-pipeline
+  spec:
+    strategy:
+      jenkinsPipelineStrategy:
+        jenkinsfile: |-
+          def frontName    = 'cigrt'
+          def gitCommitMsg = ''
+          def templateMark = 'gerrit-jenkins-ci'
+          def templateSel  = 'jenkins-ci-mark'
+          pipeline {
+              agent {
+                  node { label 'maven' }
+              }
+              options { timeout(time: 110, unit: 'MINUTES') }
+              parameters {
+                  string(defaultValue: 'master', description: 'Gerrit Docker Image - Source Git Branch', name: 'gerritBranch')
+                  string(defaultValue: 'master', description: 'Gerrit Docker Image - Source Git Hash', name: 'gerritHash')
+                  string(defaultValue: '${GIT_SOURCE_HOST}/faust64/docker-gerrit.git', description: 'Gerrit Docker Image - Source Git Repository', name: 'gerritRepo')
+                  string(defaultValue: '3', description: 'Max Retry', name: 'jobMaxRetry')
+                  string(defaultValue: '1', description: 'Retry Count', name: 'jobRetryCount')
+                  string(defaultValue: '${OPENSHIFT_ROUTED_DOMAIN}', description: 'CI Router Root Domain', name: 'rootDomain')
+              }
+              stages {
+                  stage('pre-cleanup') {
+                      steps {
+                          script {
+                              openshift.withCluster() {
+                                  openshift.withProject() {
+                                      echo "Using project: ${openshift.project()}"
+                                      echo "cleaning up previous assets for gerrit-${frontName}-${params.gerritHash}"
+                                      openshift.selector("buildconfigs", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                      openshift.selector("configmaps", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                      openshift.selector("deploymentconfigs", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                      openshift.selector("routes", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                      openshift.selector("statefulsets", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                      openshift.selector("services", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                      openshift.selector("secrets", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                  }
+                              }
+                          }
+                      }
+                  }
+                  stage('create') {
+                      steps {
+                          script {
+                              openshift.withCluster() {
+                                  openshift.withProject() {
+                                      def namespace = "${openshift.project()}"
+                                      try {
+                                          timeout(10) {
+                                              def cloneProto = "http"
+                                              def created
+                                              def objectsFromTemplate
+                                              def privateRepo = false
+                                              def repoHost = params.gerritRepo.split('/')[0]
+                                              def templatePath = "/tmp/workspace/${namespace}/${namespace}-gerrit-jenkins-pipeline/tmpgerrit${params.gerritBranch}/openshift"
+                                              sh "git config --global http.sslVerify false"
+                                              sh "rm -fr tmpgerrit${params.gerritBranch}; mkdir -p tmpgerrit${params.gerritBranch}"
+                                              dir ("tmpgerrit${params.gerritBranch}") {
+                                                  try {
+                                                      withCredentials([string(credentialsId: "git-${repoHost}", variable: 'GIT_TOKEN')]) {
+                                                          cloneProto = "https"
+                                                          privateRepo = true
+                                                          echo "cloning ${params.gerritRepo} over https, using ${repoHost} token"
+                                                          try { git([ branch: "${params.gerritBranch}", url: "https://${GIT_TOKEN}@${params.gerritRepo}" ]) }
+                                                          catch(e2) {
+                                                              echo "Failed cloning ${params.gerritRepo}#${params.gerritBranch} - ${e2}"
+                                                              throw e2
+                                                          }
+                                                      }
+                                                  } catch(e) {
+                                                      if (privateRepo != true) {
+                                                          echo "caught ${e} - assuming no credentials required"
+                                                          echo "cloning ${params.gerritRepo} over http"
+                                                          try { git([ branch: "${params.gerritBranch}", url: "http://${params.gerritRepo}" ]) }
+                                                          catch(e2) {
+                                                              echo "Failed cloning ${params.gerritRepo}#${params.gerritBranch} - ${e2}"
+                                                              throw e2
+                                                          }
+                                                      } else { throw e }
+                                                  }
+                                                  try {
+                                                      gitCommitMsg = sh(returnStdout: true, script: "git log -n 1").trim()
+                                                  } catch(e) { echo "In non-critical catch block resolving commit message - ${e}" }
+                                              }
+                                              try { sh "test -d ${templatePath}" }
+                                              catch (e) {
+                                                  echo "Could not find ./openshift in ${params.gerritRepo}#${params.gerritBranch}"
+                                                  throw e
+                                              }
+                                              echo "Processing Gerrit:${params.gerritHash}, from ${repoHost}, tagging to ${params.gerritBranch}"
+                                              try {
+                                                  echo " == Creating ImageStream =="
+                                                  objectsFromTemplate = openshift.process("-f", "${templatePath}/imagestream.yaml", '-p', "FRONTNAME=demo")
+                                                  echo "The template will create ${objectsFromTemplate.size()} objects"
+                                                  created = openshift.apply(objectsFromTemplate)
+                                                  created.withEach { echo "Created ${it.name()} with labels ${it.object().metadata.labels}" }
+                                              } catch(e) { echo "In non-critical catch block while creating ImageStream - ${e}" }
+                                              try {
+                                                  echo " == Creating BuildConfigs =="
+                                                  if (privateRepo) {
+                                                      withCredentials([string(credentialsId: "git-${repoHost}", variable: 'GIT_TOKEN')]) {
+                                                          objectsFromTemplate = openshift.process("-f", "${templatePath}/build-with-secret.yaml", '-p', "GIT_DEPLOYMENT_TOKEN=${GIT_TOKEN}",
+                                                              '-p', "FRONTNAME=demo", '-p', "GERRIT_REPOSITORY_REF=${params.gerritHash}", '-p', "GERRIT_REPOSITORY_URL=${cloneProto}://${params.gerritRepo}")
+                                                      }
+                                                  } else {
+                                                      objectsFromTemplate = openshift.process("-f", "${templatePath}/build.yaml", '-p', "FRONTNAME=demo",
+                                                          '-p', "GERRIT_REPOSITORY_REF=${params.gerritHash}", '-p', "GERRIT_REPOSITORY_URL=${cloneProto}://${params.gerritRepo}")
+                                                  }
+                                                  echo "The template will create ${objectsFromTemplate.size()} objects"
+                                                  for (o in objectsFromTemplate) { o.metadata.labels["${templateSel}"] = "${templateMark}-${params.gerritHash}" }
+                                                  created = openshift.apply(objectsFromTemplate)
+                                                  created.withEach { echo "Created ${it.name()} from template with labels ${it.object().metadata.labels}" }
+                                              } catch(e) { echo "In non-critical catch block while creating BuildConfigs - ${e}" }
+                                              try {
+                                                  echo " == Creating Secrets =="
+                                                  objectsFromTemplate = openshift.process("-f", "${templatePath}/secret.yaml", '-p', "FRONTNAME=${frontName}-${params.gerritHash}")
+                                                  echo "The template will create ${objectsFromTemplate.size()} objects"
+                                                  for (o in objectsFromTemplate) { o.metadata.labels["${templateSel}"] = "${templateMark}-${params.gerritHash}" }
+                                                  created = openshift.create(objectsFromTemplate)
+                                                  created.withEach { echo "Created ${it.name()} from template with labels ${it.object().metadata.labels}" }
+                                              } catch(e) { echo "In non-critical catch block while creating Secret - ${e}" }
+                                              echo " == Creating Demo =="
+                                              objectsFromTemplate = openshift.process("-f", "${templatePath}/run-ephemeral.yaml", '-p', "FRONTNAME=${frontName}-${params.gerritHash}",
+                                                  '-p', "GERRIT_IMAGE_TAG=${params.gerritHash}", '-p', "ROOT_DOMAIN=${params.gerritHash}.${params.rootDomain}")
+                                              echo "The template will create ${objectsFromTemplate.size()} objects"
+                                              for (o in objectsFromTemplate) { o.metadata.labels["${templateSel}"] = "${templateMark}-${params.gerritHash}" }
+                                              created = openshift.create(objectsFromTemplate)
+                                              created.withEach { echo "Created ${it.name()} from template with labels ${it.object().metadata.labels}" }
+                                          }
+                                      } catch(e) {
+                                          echo "In catch block while creating resources - ${e}"
+                                          throw e
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+                  stage('build') {
+                      steps {
+                          script {
+                              openshift.withCluster() {
+                                  openshift.withProject() {
+                                      try {
+                                          timeout(60) {
+                                              echo "watching gerrit-demo-${params.gerritHash} docker image build"
+                                              def builds = openshift.selector("bc", [ name: "gerrit-demo-${params.gerritHash}" ]).related('builds')
+                                              builds.untilEach(1) { return (it.object().status.phase == "Complete") }
+                                          }
+                                      } catch(e) {
+                                          echo "In catch block while building Docker image - ${e}"
+                                          throw e
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+                  stage('deploy') {
+                      steps {
+                          script {
+                              openshift.withCluster() {
+                                  openshift.withProject() {
+                                      try {
+                                          timeout(10) {
+                                              def namespace = "${openshift.project()}"
+                                              try {
+                                                  sh """
+                                                  oc login https://kubernetes.default.svc.cluster.local --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt --token=\$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) > /dev/null 2>&1
+                                                  oc describe -n ${namespace} imagestreamtag gerrit-demo:${params.gerritHash} || exit 1
+                                                  """
+                                              } catch(e) {
+                                                  echo "In catch block while looking for Gerrit image - ${e}"
+                                                  throw e
+                                              }
+                                              retry(2) {
+                                                  echo "watching mysql-${frontName}-${params.gerritHash} deployment rollout"
+                                                  def dc = openshift.selector("dc", [ name: "mysql-${frontName}-${params.gerritHash}" ]).related('pods')
+                                                  dc.untilEach(1) { return (it.object().status.phase == "Running") }
+                                                  echo "watching gerrit-${frontName}-${params.gerritHash} deployment rollout"
+                                                  dc = openshift.selector("dc", [ name: "gerrit-${frontName}-${params.gerritHash}" ]).related('pods')
+                                                  dc.untilEach(1) { return (it.object().status.phase == "Running") }
+                                              }
+                                          }
+                                      } catch(e) {
+                                          echo "In catch block while deploying - ${e}"
+                                          throw e
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+                  stage('check') {
+                      steps {
+                          script {
+                              openshift.withCluster() {
+                                  openshift.withProject() {
+                                      try {
+                                          timeout(15) {
+                                              echo "waiting an additional 10 minutes for applications to finish starting up"
+                                              sleep 600
+                                              retry(3) {
+                                                  def grt = httpRequest ignoreSslErrors: true, url: "https://gerrit.${params.gerritHash}.${params.rootDomain}", timeout: 30, httpMode: 'GET', validResponseCodes: '200:302,401'
+                                                  println("GET portal status: " + grt.status)
+                                                  println("GET portal content: " + grt.content)
+                                              }
+                                          }
+                                      } catch(e) {
+                                          echo "In catch block while checking Gerrit - ${e}"
+                                          throw e
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+                  stage('tag') {
+                      steps {
+                          script {
+                              if ("${params.gerritBranch}" == "${params.gerritHash}") { echo "skipping tag - source matches target" }
+                              else {
+                                  openshift.withCluster() {
+                                      openshift.withProject() {
+                                          try {
+                                              timeout(5) {
+                                                  def namespace = "${openshift.project()}"
+                                                  retry(3) {
+                                                      sh """
+                                                      oc login https://kubernetes.default.svc.cluster.local --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt --token=\$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) > /dev/null 2>&1
+                                                      oc tag -n ${namespace} gerrit-demo:${params.gerritHash} gerrit-demo:${params.gerritBranch}
+                                                      """
+                                                  }
+                                              }
+                                          } catch(e) {
+                                              echo "in catch block while tagging Gerrit image - ${e}"
+                                              throw e
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+              post {
+                  always {
+                      script {
+                          openshift.withCluster() {
+                              openshift.withProject() {
+                                  def namespace   = "${openshift.project()}"
+                                  def postJobName = "${namespace}/${namespace}-post-triggers-jenkins-pipeline"
+                                  currentBuild.description = """
+                                  ${params.gerritRepo} ${params.gerritBranch} (try ${params.jobRetryCount}/${params.jobMaxRetry})
+                                  ${gitCommitMsg}
+                                  """.stripIndent()
+                                  echo "cleaning up assets for gerrit-demo-${params.gerritHash}"
+                                  sh "rm -fr /tmp/workspace/${namespace}/${namespace}-gerrit-jenkins-pipeline/tmpgerrit${params.gerritBranch}"
+                                  openshift.selector("buildconfigs", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                  openshift.selector("configmaps", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                  openshift.selector("deploymentconfigs", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                  openshift.selector("routes", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                  openshift.selector("statefulsets", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                  openshift.selector("services", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                  openshift.selector("secrets", [ "${templateSel}": "${templateMark}-${params.gerritHash}" ]).delete()
+                                  def jobParams = [
+                                          [$class: 'StringParameterValue', name: "jobMaxRetry", value: params.jobMaxRetry],
+                                          [$class: 'StringParameterValue', name: "jobRetryCount", value: params.jobRetryCount],
+                                          [$class: 'StringParameterValue', name: "jobStatus", value: currentBuild.currentResult],
+                                          [$class: 'StringParameterValue', name: "sourceBranch", value: params.gerritBranch],
+                                          [$class: 'StringParameterValue', name: "sourceComponent", value: "gerrit"],
+                                          [$class: 'StringParameterValue', name: "sourceRef", value: params.gerritHash],
+                                          [$class: 'StringParameterValue', name: "sourceRepo", value: params.gerritRepo]
+                                      ]
+                                  try { build job: postJobName, parameters: jobParams, propagate: false, wait: false }
+                                  catch(e) { echo "caught ${e} starting Job post-process" }
+                              }
+                          }
+                      }
+                  }
+                  changed { echo "changed?" }
+                  failure { echo "Build failed (${params.jobRetryCount} out of ${params.jobMaxRetry})" }
+                  success { echo "success!" }
+                  unstable { echo "unstable?" }
+              }
+          }
+      type: JenkinsPipeline
+parameters:
+- name: GIT_SOURCE_HOST
+  description: Git FQDN we would build images from
+  displayName: Git
+  value: github.com
+- name: OPENSHIFT_ROUTED_DOMAIN
+  description: OpenShift Routers-served Root Domain
+  displayName: CI Router Domain
+  value: ci.example.com

@@ -1,0 +1,420 @@
+apiVersion: v1
+kind: Template
+labels:
+  app: gerrit
+  template: gerrit-slave
+metadata:
+  annotations:
+    description: Gerrit Slave - persistent
+      see https://github.com/faust64/docker-gerrit
+    iconClass: icon-openshift
+    openshift.io/display-name: Gerrit Slave
+    tags: gerrit
+  name: gerrit-slave
+objects:
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: gerrit-slave-${FRONTNAME}
+  data:
+    gerrit.config: |
+      [gerrit]
+              basePath = git
+              serverId = cef467b6-2cbc-42d4-b21e-e4c29d1df424
+              canonicalWebUrl = https://gerrit-slave.${ROOT_DOMAIN}/
+      [index]
+              type = LUCENE
+      [sendemail]
+              smtpServer = ${SMTP_RELAY}
+      [sshd]
+              listenAddress = *:29418
+              threads = 8
+              idleTimeout = 240m
+              maxConnectionsPerUser = 0
+      [httpd]
+              listenUrl = proxy-https://*:8080
+      [cache]
+              directory = cache
+      [cache "web_sessions"]
+              maxAge = 5d
+      [cache "ldap_groups"]
+              maxAge = 60
+      [cache "accounts"]
+              maxAge = 60
+      [cache "groups"]
+              maxAge = 60
+      [cache "groups_byinclude"]
+              maxAge = 60
+      [cache "groups_members"]
+              maxAge = 60
+      [download]
+              scheme = ssh
+      [hooks]
+              path = /var/gerrit/hooks
+      [noteDB "changes"]
+              automigrate = true
+      [plugins]
+              allowRemoteAdmin = true
+      [container]
+              javaHome = /usr/lib/jvm/java-8-openjdk-amd64/jre
+              javaOptions = "-Dflogger.backend_factory=com.google.common.flogger.backend.log4j.Log4jBackendFactory#getInstance"
+              javaOptions = "-Dflogger.logging_context=com.google.gerrit.server.logging.LoggingContext#getInstance"
+              javaOptions = -Djava.security.egd=file:/dev/urandom
+              heapLimit = ${GERRIT_HEAP_LIMIT}
+              user = gerrit
+              slave = true
+              daemonOpt = --enable-httpd
+      [receive]
+              enableSignedPush = false
+      [auth]
+              type = LDAP
+      [ldap]
+              accountBase = ou=users,${BASE_SUFFIX}
+              accountEmailAddress = mail
+              accountFullName = sn
+              accountPattern = ${LDAP_ACCOUNT_PATTERN}
+              accountScope = sub
+              groupBase = ou=groups,${BASE_SUFFIX}
+              groupMemberPattern = ${LDAP_GROUP_MEMBER_PATTERN}
+              groupPattern = ${LDAP_GROUP_PATTERN}
+              groupScope = sub
+              password = ${LDAP_PASSWORD}
+              server = ${LDAP_URI}
+              sslVerify = false
+              username = ${LDAP_USER}
+      [database]
+              database = ${GERRIT_MYSQL_DATABASE}
+              hostname = ${GERRIT_MYSQL_HOST}
+              password = ${GERRIT_MYSQL_PASS}
+              username = ${GERRIT_MYSQL_USER}
+              type = mysql
+      #[plugin "verify-status"]
+      #        database = ${GERRIT_MYSQL_DATABASE}
+      #        dbType = mysql
+      #        hostname = ${GERRIT_MYSQL_HOST}
+      #        password = ${GERRIT_MYSQL_PASS}
+      #        username = ${GERRIT_MYSQL_USER}
+    replication.config: |
+      #nope
+- apiVersion: apps/v1
+  kind: StatefulSet
+  metadata:
+    labels:
+      name: gerrit-slave-${FRONTNAME}
+    name: gerrit-slave-${FRONTNAME}
+  spec:
+    replicas: 2
+    selector:
+      matchLabels:
+        name: gerrit-slave-${FRONTNAME}
+    serviceName: gerrit-slave-${FRONTNAME}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: gerrit-slave-${FRONTNAME}
+      spec:
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+            - podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                  - key: name
+                    operator: In
+                    values:
+                    - gerrit-master-${FRONTNAME}
+                    - gerrit-slave-${FRONTNAME}
+                topologyKey: kubernetes.io/hostname
+              weight: 42
+        dnsPolicy: ClusterFirst
+        containers:
+        - env:
+          - name: DB_DRIVER
+            value: mysql
+          - name: GERRIT_IS_SLAVE
+            value: yay
+          - name: MYSQL_HOST
+            value: ${GERRIT_MYSQL_HOST}
+          image: docker-registry.default.svc:5000/${NAMESPACE}/gerrit-${GERRIT_IMAGE_FRONTNAME}:${GERRIT_IMAGE_TAG}
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 19
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            successThreshold: 1
+            tcpSocket:
+              port: 8080
+            timeoutSeconds: 3
+          name: gerrit
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          - containerPort: 29418
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 5
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            successThreshold: 1
+            tcpSocket:
+              port: 8080
+            timeoutSeconds: 3
+          resources:
+            limits:
+              cpu: "${GERRIT_CPU_LIMIT}"
+              memory: "${GERRIT_MEMORY_LIMIT}"
+          volumeMounts:
+          - name: config
+            mountPath: /config
+          - name: data
+            mountPath: /var/gerrit/data
+            subPath: data
+          - name: data
+            mountPath: /var/gerrit/cache
+            subPath: cache
+          - name: data
+            mountPath: /var/gerrit/db
+            subPath: db
+          - name: data
+            mountPath: /var/gerrit/etc
+            subPath: etc
+          - name: data
+            mountPath: /var/gerrit/git
+            subPath: git
+          - name: data
+            mountPath: /var/gerrit/index
+            subPath: index
+          - name: data
+            mountPath: /var/gerrit/lib
+            subPath: lib
+          - name: data
+            mountPath: /var/gerrit/plugins
+            subPath: plugins
+          - name: data
+            mountPath: /var/gerrit/tmp
+            subPath: tmp
+          - name: sshkey
+            mountPath: /.ssh/id_rsa.pub
+            subPath: public-key
+          - name: sshkey
+            mountPath: /.ssh/id_rsa
+            subPath: private-key
+        - env:
+          - name: HOSTKEY_SOURCE
+            value: /etc/ssh
+          - name: HOSTKEY_TARGET
+            value: /var/gerrit/etc
+          - name: MY_HOME
+            value: /var/gerrit/git
+          - name: SSH_USERNAME
+            value: "admin"
+          - name: SSHD_PORT
+            value: "29419"
+          - name: SSHD_TMPDIR
+            value: /var/gerrit/tmp
+          image: docker-registry.default.svc:5000/${NAMESPACE}/sshd-${SSHD_IMAGE_FRONTNAME}:${SSHD_IMAGE_TAG}
+          imagePullPolicy: IfNotPresent
+          name: sshd
+          ports:
+          - containerPort: 29419
+            protocol: TCP
+          resources:
+            limits:
+              cpu: "${GERRIT_SSHD_CPU_LIMIT}"
+              memory: "${GERRIT_SSHD_MEMORY_LIMIT}"
+          volumeMounts:
+          - name: data
+            mountPath: /var/gerrit/git
+            subPath: git
+          - name: data
+            mountPath: /var/gerrit/etc
+            subPath: etc
+          - name: tmp
+            mountPath: /var/gerrit/tmp
+          - name: sshkey
+            mountPath: /.ssh/id_rsa.pub
+            subPath: public-key
+        restartPolicy: Always
+        volumes:
+        - configMap:
+            defaultMode: 0420
+            name: gerrit-slave-${FRONTNAME}
+          name: config
+        - name: sshkey
+          secret:
+            secretName: gerrit-ssh-${FRONTNAME}
+        - name: tmp
+          emptyDir: {}
+    volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ ReadWriteOnce ]
+        resources:
+          requests:
+            storage: ${GERRIT_VOLUME_CAPACITY}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: Exposes Gerrit Services
+    name: gerrit-slave-${FRONTNAME}
+  spec:
+    ports:
+    - name: ssh-alt
+      port: 22
+      targetPort: 29418
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: ssh
+      port: 29418
+      targetPort: 29418
+    - name: sshd
+      port: 29419
+      targetPort: 29419
+    selector:
+      name: gerrit-slave-${FRONTNAME}
+    clusterIP: None
+- apiVersion: v1
+  kind: Route
+  metadata:
+    annotations:
+      haproxy.router.openshift.io/timeout: 3m
+    name: gerrit-slave-${FRONTNAME}
+  spec:
+    host: gerrit-slave.${ROOT_DOMAIN}
+    port:
+      targetPort: 8080
+    to:
+      kind: Service
+      name: gerrit-slave-${FRONTNAME}
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: edge
+parameters:
+- name: DO_GERRIT_MASTER
+  value: "yes"
+- name: DO_GERRIT_SLAVE
+  value: "yes"
+- name: FRONTNAME
+  description: The name identifier assigned to objects defined in this template
+  displayName: Name
+  required: true
+  value: demo
+- name: GERRIT_CPU_LIMIT
+  description: Maximum amount of CPU a Gerrit container can use
+  displayName: Gerrit CPU Limit
+  required: true
+  value: 300m
+- name: GERRIT_HEAP_LIMIT
+  description: Maximum amount of memory Gerrit JVM would use for its heap
+  displayName: Gerrit Heap Memory Limit
+  required: true
+  value: 1200m
+- name: GERRIT_IMAGE_FRONTNAME
+  description: The name assigned to ImageStream object defined in corresponding template
+  displayName: Gerrit ImageStrem Name
+  required: true
+  value: demo
+- name: GERRIT_IMAGE_TAG
+  description: The ImageStreamTag we should pull images from
+  displayName: Gerrit ImageStream Tag
+  required: true
+  value: master
+- name: GERRIT_MEMORY_LIMIT
+  description: Maximum amount of memory a Gerrit container can use
+  displayName: Gerrit Memory Limit
+  required: true
+  value: 2048Mi
+- name: GERRIT_MYSQL_DATABASE
+  description: Gerrit MySQL database name
+  displayName: Gerrit MySQL Database
+  required: true
+  value: gerrit
+- name: GERRIT_MYSQL_PASS
+  description: Gerrit MySQL service account password
+  displayName: Gerrit MySQL Password
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  required: true
+- name: GERRIT_MYSQL_USER
+  description: Gerrit MySQL service account username
+  displayName: Gerrit MySQL Username
+  required: true
+  value: sw33t
+- name: GERRIT_MYSQL_HOST
+  description: Gerrit MySQL Hostname
+  displayName: Gerrit MySQL Host
+  required: true
+  value: mysql-demo
+- name: GERRIT_SSHD_CPU_LIMIT
+  description: Maximum amount of CPU a Gerrit SSHD container can use
+  displayName: Gerrit SSHD CPU Limit
+  required: true
+  value: 100m
+- name: GERRIT_SSHD_MEMORY_LIMIT
+  description: Maximum amount of memory a Gerrit SSHD container can use
+  displayName: Gerrit SSHD Memory Limit
+  required: true
+  value: 128Mi
+- name: GERRIT_VOLUME_CAPACITY
+  description: Volume space available for Gerrit site data, e.g. 512Mi, 2Gi.
+  displayName: Gerrit Volume Capacity
+  required: true
+  value: 32Gi
+- name: NAMESPACE
+  description: Gerrit Images Namespace
+  displayName: Gerrit Images Namespace
+  required: true
+  value: gerrit
+- name: SSHD_IMAGE_FRONTNAME
+  description: The name assigned to ImageStream object defined in corresponding template
+  displayName: SSHD ImageStream Name
+  required: true
+  value: demo
+- name: SSHD_IMAGE_TAG
+  description: The ImageStreamTag we should pull images from
+  displayName: SSHD ImageStream Tag
+  required: true
+  value: master
+- name: BASE_SUFFIX
+  description: OpenLDAP base suffix
+  displayName: LDAP Base Suffix
+  required: true
+- name: LDAP_ACCOUNT_PATTERN
+  description: OpenLDAP Accounts Filter
+  displayName: LDAP Accounts Filter
+  value: "(&(objectClass=person)(uid=${username})(!(pwdAccountLockedTime=*)))"
+- name: LDAP_GROUP_MEMBER_PATTERN
+  description: OpenLDAP Groups Membership Filter
+  displayName: LDAP Groups Membership Filter
+  value: "(&(objectClass=posixGroup)(member=${dn}))"
+- name: LDAP_GROUP_PATTERN
+  description: OpenLDAP Groups Filter
+  displayName: LDAP Groups Filter
+  value: "(&(objectClass=posixGroup)(cn=${groupname}))"
+- name: LDAP_URI
+  description: LDAP Host URI
+  displayName: LDAP Host URI
+  required: true
+- name: LDAP_PASSWORD
+  description: LDAP Bind Password
+  displayName: LDAP Bind Password
+  required: true
+- name: LDAP_USER
+  description: LDAP Bind User
+  displayName: LDAP Bind User
+  required: true
+- name: ROOT_DOMAIN
+  description: Root Domain
+  displayName: Root Domain
+  required: true
+  value: demo.local
+- name: SMTP_RELAY
+  description: SMTP Relay
+  displayName: SMTP Relay
+  required: true
+  value: smtp.demo.local

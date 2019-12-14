@@ -1,0 +1,471 @@
+apiVersion: v1
+kind: Template
+labels:
+  app: gerrit
+  template: gerrit-persistent
+metadata:
+  annotations:
+    description: Gerrit - persistent
+      see https://github.com/faust64/docker-gerrit
+    iconClass: icon-openshift
+    openshift.io/display-name: Gerrit
+    tags: gerrit
+  name: gerrit-persistent
+objects:
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-admpassword: "{.data['database-admin-password']}"
+      template.openshift.io/expose-database_name: "{.data['database-name']}"
+      template.openshift.io/expose-password: "{.data['database-password']}"
+      template.openshift.io/expose-username: "{.data['database-user']}"
+    name: gerrit-${FRONTNAME}
+  stringData:
+    database-admin-password: "${GERRIT_MYSQL_ADMIN_PASS}"
+    database-name: "${GERRIT_MYSQL_DATABASE}"
+    database-password: "${GERRIT_MYSQL_PASS}"
+    database-user: "${GERRIT_MYSQL_USER}"
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: gerrit-${FRONTNAME}
+  data:
+    gerrit.config: |
+      [gerrit]
+              basePath = git
+              serverId = cef467b6-2cbc-42d4-b21e-e4c29d1df424
+              canonicalWebUrl = https://gerrit.${ROOT_DOMAIN}/
+      [index]
+              type = LUCENE
+      [sendemail]
+              smtpServer = ${SMTP_RELAY}
+      [sshd]
+              listenAddress = *:29418
+              threads = 8
+              idleTimeout = 240m
+              maxConnectionsPerUser = 0
+      [httpd]
+              listenUrl = proxy-https://*:8080
+      [cache]
+              directory = cache
+      [cache "web_sessions"]
+              maxAge = 5d
+      [cache "ldap_groups"]
+              maxAge = 60
+      [cache "accounts"]
+              maxAge = 60
+      [cache "groups"]
+              maxAge = 60
+      [cache "groups_byinclude"]
+              maxAge = 60
+      [cache "groups_members"]
+              maxAge = 60
+      [download]
+              scheme = ssh
+      [hooks]
+              path = /var/gerrit/hooks
+      [noteDB "changes"]
+              automigrate = true
+      [plugins]
+              allowRemoteAdmin = true
+      [container]
+              javaHome = /usr/lib/jvm/java-8-openjdk-amd64/jre
+              javaOptions = "-Dflogger.backend_factory=com.google.common.flogger.backend.log4j.Log4jBackendFactory#getInstance"
+              javaOptions = "-Dflogger.logging_context=com.google.gerrit.server.logging.LoggingContext#getInstance"
+              javaOptions = -Djava.security.egd=file:/dev/urandom
+              heapLimit = ${GERRIT_HEAP_LIMIT}
+              user = gerrit
+      [receive]
+              enableSignedPush = false
+      [auth]
+              type = LDAP
+      [ldap]
+              accountBase = ou=users,${BASE_SUFFIX}
+              accountEmailAddress = mail
+              accountFullName = sn
+              accountPattern = ${LDAP_ACCOUNT_PATTERN}
+              accountScope = sub
+              groupBase = ou=groups,${BASE_SUFFIX}
+              groupMemberPattern = ${LDAP_GROUP_MEMBER_PATTERN}
+              groupName = cn
+              groupPattern = ${LDAP_GROUP_PATTERN}
+              groupScope = sub
+              password = ${LDAP_PASSWORD}
+              server = ${LDAP_URI}
+              sslVerify = false
+              username = ${LDAP_USER}
+      [database]
+              database = ${GERRIT_MYSQL_DATABASE}
+              hostname = mysql-${FRONTNAME}
+              password = ${GERRIT_MYSQL_PASS}
+              username = ${GERRIT_MYSQL_USER}
+              type = mysql
+      #[plugin "verify-status"]
+      #        database = ${GERRIT_MYSQL_DATABASE}
+      #        dbType = mysql
+      #        hostname = mysql-${FRONTNAME}
+      #        password = ${GERRIT_MYSQL_PASS}
+      #        username = ${GERRIT_MYSQL_USER}
+    replication.config: |
+      #nope
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: mysql-${FRONTNAME}
+  spec:
+    accessModes: [ ReadWriteOnce ]
+    resources:
+      requests:
+        storage: ${MYSQL_VOLUME_CAPACITY}
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    name: mysql-${FRONTNAME}
+  spec:
+    replicas: 1
+    selector:
+      name: mysql-${FRONTNAME}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: mysql-${FRONTNAME}
+      spec:
+        containers:
+        - env:
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: gerrit-${FRONTNAME}
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: gerrit-${FRONTNAME}
+          - name: MYSQL_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-admin-password
+                name: gerrit-${FRONTNAME}
+          - name: MYSQL_DATABASE
+            valueFrom:
+              secretKeyRef:
+                key: database-name
+                name: gerrit-${FRONTNAME}
+          image: ' '
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            initialDelaySeconds: 30
+            tcpSocket:
+              port: 3306
+            timeoutSeconds: 1
+          name: mariadb
+          ports:
+          - containerPort: 3306
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - MYSQL_PWD="$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u $MYSQL_USER -D $MYSQL_DATABASE -e 'SELECT 1'
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: "${GERRIT_MYSQL_CPU_LIMIT}"
+              memory: "${GERRIT_MYSQL_MEMORY_LIMIT}"
+          volumeMounts:
+          - mountPath: /var/lib/mysql/data
+            name: mysql-${FRONTNAME}
+        volumes:
+        - name: mysql-${FRONTNAME}
+          persistentVolumeClaim:
+            claimName: mysql-${FRONTNAME}
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames: [ mariadb ]
+        from:
+          kind: ImageStreamTag
+          name: mariadb:${MARIADB_VERSION}
+          namespace: openshift
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: mysql-${FRONTNAME}
+  spec:
+    ports:
+    - name: mysql
+      protocol: TCP
+      port: 3306
+      targetPort: 3306
+    selector:
+      name: mysql-${FRONTNAME}
+    type: ClusterIP
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: gerrit-${FRONTNAME}
+  spec:
+    accessModes: [ ReadWriteOnce ]
+    resources:
+      requests:
+        storage: ${GERRIT_VOLUME_CAPACITY}
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      name: gerrit-${FRONTNAME}
+    name: gerrit-${FRONTNAME}
+  spec:
+    replicas: 1
+    selector:
+      name: gerrit-${FRONTNAME}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: gerrit-${FRONTNAME}
+      spec:
+        dnsPolicy: ClusterFirst
+        containers:
+        - env:
+          - name: DB_DRIVER
+            value: mysql
+          - name: MYSQL_HOST
+            value: mysql-${FRONTNAME}
+          image: ' '
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 19
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            successThreshold: 1
+            tcpSocket:
+              port: 8080
+            timeoutSeconds: 3
+          name: gerrit
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          - containerPort: 29418
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 5
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            successThreshold: 1
+            tcpSocket:
+              port: 8080
+            timeoutSeconds: 3
+          resources:
+            limits:
+              cpu: "${GERRIT_CPU_LIMIT}"
+              memory: "${GERRIT_MEMORY_LIMIT}"
+          volumeMounts:
+          - name: config
+            mountPath: /config
+          - name: data
+            mountPath: /var/gerrit/data
+            subPath: data
+          - name: data
+            mountPath: /var/gerrit/cache
+            subPath: cache
+          - name: data
+            mountPath: /var/gerrit/db
+            subPath: db
+          - name: data
+            mountPath: /var/gerrit/etc
+            subPath: etc
+          - name: data
+            mountPath: /var/gerrit/git
+            subPath: git
+          - name: data
+            mountPath: /var/gerrit/index
+            subPath: index
+          - name: data
+            mountPath: /var/gerrit/lib
+            subPath: lib
+          - name: data
+            mountPath: /var/gerrit/plugins
+            subPath: plugins
+          - name: data
+            mountPath: /var/gerrit/tmp
+            subPath: tmp
+        restartPolicy: Always
+        volumes:
+        - configMap:
+            defaultMode: 0420
+            name: gerrit-${FRONTNAME}
+          name: config
+        - name: data
+          persistentVolumeClaim:
+            claimName: gerrit-${FRONTNAME}
+    triggers:
+    - type: ImageChange
+      imageChangeParams:
+        automatic: true
+        containerNames:
+        - gerrit
+        from:
+          kind: ImageStreamTag
+          name: gerrit-${GERRIT_IMAGE_FRONTNAME}:${GERRIT_IMAGE_TAG}
+        lastTriggeredImage: ''
+    - type: ConfigChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: Exposes Gerrit Services
+    name: gerrit-${FRONTNAME}
+  spec:
+    ports:
+    - name: gerrit-http
+      port: 8080
+      targetPort: 8080
+    - name: gerrit-ssh-alt
+      port: 22
+      targetPort: 29418
+    - name: gerrit-ssh
+      port: 29418
+      targetPort: 29418
+    selector:
+      name: gerrit-${FRONTNAME}
+    type: NodePort
+- apiVersion: v1
+  kind: Route
+  metadata:
+    annotations:
+      haproxy.router.openshift.io/timeout: 3m
+    name: gerrit-${FRONTNAME}
+  spec:
+    host: gerrit.${ROOT_DOMAIN}
+    port:
+      targetPort: 8080
+    to:
+      kind: Service
+      name: gerrit-${FRONTNAME}
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: edge
+parameters:
+- name: FRONTNAME
+  description: The name identifier assigned to objects defined in this template
+  displayName: Name
+  required: true
+  value: demo
+- name: GERRIT_CPU_LIMIT
+  description: Maximum amount of CPU a Gerrit container can use
+  displayName: Gerrit CPU Limit
+  required: true
+  value: 300m
+- name: GERRIT_HEAP_LIMIT
+  description: Maximum amount of memory Gerrit JVM would use for its heap
+  displayName: Gerrit Heap Memory Limit
+  required: true
+  value: 1200m
+- name: GERRIT_IMAGE_FRONTNAME
+  description: The name assigned to ImageStream object defined in corresponding template
+  displayName: Name
+  required: true
+  value: demo
+- name: GERRIT_IMAGE_TAG
+  description: The ImageStreamTag we should pull images from
+  displayName: Tag
+  required: true
+  value: master
+- name: GERRIT_MEMORY_LIMIT
+  description: Maximum amount of memory a Gerrit container can use
+  displayName: Gerrit Memory Limit
+  required: true
+  value: 2048Mi
+- name: GERRIT_MYSQL_ADMIN_PASS
+  description: Gerrit MySQL Admin service account password
+  displayName: Gerrit MySQL Admin Password
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  required: true
+- name: GERRIT_MYSQL_CPU_LIMIT
+  description: Maximum amount of CPU a Gerrit database container can use
+  displayName: Gerrit Postgres CPU Limit
+  required: true
+  value: 300m
+- name: GERRIT_MYSQL_DATABASE
+  description: Gerrit MySQL database name
+  displayName: Gerrit MySQL Database
+  required: true
+  value: gerrit
+- name: GERRIT_MYSQL_MEMORY_LIMIT
+  description: Maximum amount of memory a Gerrit database container can use
+  displayName: Gerrit Postgres Memory Limit
+  required: true
+  value: 768Mi
+- name: GERRIT_MYSQL_PASS
+  description: Gerrit MySQL service account password
+  displayName: Gerrit MySQL Password
+  from: '[a-zA-Z0-9]{40}'
+  generate: expression
+  required: true
+- name: GERRIT_MYSQL_USER
+  description: Gerrit MySQL service account username
+  displayName: Gerrit MySQL Username
+  required: true
+  value: sw33t
+- name: GERRIT_VOLUME_CAPACITY
+  description: Volume space available for Gerrit site data, e.g. 512Mi, 2Gi.
+  displayName: Gerrit Volume Capacity
+  required: true
+  value: 32Gi
+- description: Version of MariaDB image to be used (10.1, 10.2 or latest).
+  displayName: Version of MariaDB Image
+  name: MARIADB_VERSION
+  required: true
+  value: "10.2"
+- name: MYSQL_VOLUME_CAPACITY
+  description: Volume space available for MySQL database, e.g. 512Mi, 2Gi.
+  displayName: MySQL Volume Capacity
+  required: true
+  value: 8Gi
+- name: BASE_SUFFIX
+  description: OpenLDAP base suffix
+  displayName: LDAP Base Suffix
+  required: true
+- name: LDAP_ACCOUNT_PATTERN
+  description: OpenLDAP Accounts Filter
+  displayName: LDAP Accounts Filter
+  value: "(&(objectClass=person)(uid=${username})(!(pwdAccountLockedTime=*)))"
+- name: LDAP_GROUP_MEMBER_PATTERN
+  description: OpenLDAP Groups Membership Filter
+  displayName: LDAP Groups Membership Filter
+  value: "(&(objectClass=posixGroup)(member=${dn}))"
+- name: LDAP_GROUP_PATTERN
+  description: OpenLDAP Groups Filter
+  displayName: LDAP Groups Filter
+  value: "(&(objectClass=posixGroup)(cn=${groupname}))"
+- name: LDAP_URI
+  description: LDAP Host URI
+  displayName: LDAP Host URI
+  required: true
+- name: LDAP_PASSWORD
+  description: LDAP Bind Password
+  displayName: LDAP Bind Password
+  required: true
+- name: LDAP_USER
+  description: LDAP Bind User
+  displayName: LDAP Bind User
+  required: true
+- name: ROOT_DOMAIN
+  description: Root Domain
+  displayName: Root Domain
+  required: true
+- name: SMTP_RELAY
+  description: SMTP Relay
+  displayName: SMTP Relay
+  required: true

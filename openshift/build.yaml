@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: Template
+labels:
+  app: gerrit
+  template: gerrit-buildconfig
+metadata:
+  annotations:
+    description: Gerrit - BuildConfig
+      see https://github.com/faust64/docker-gerrit
+    iconClass: icon-openshift
+    openshift.io/display-name: Gerrit
+    tags: gerrit
+  name: gerrit-buildconfig
+objects:
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    annotations:
+      description: Builds Gerrit images
+    labels:
+      name: gerrit-${FRONTNAME}-${GERRIT_REPOSITORY_REF}
+    name: gerrit-${FRONTNAME}-${GERRIT_REPOSITORY_REF}
+  spec:
+    failedBuildsHistoryLimit: 1
+    output:
+      to:
+        kind: ImageStreamTag
+        name: gerrit-${FRONTNAME}:${GERRIT_REPOSITORY_REF}
+    resources:
+      limits:
+        cpu: 400m
+        memory: 3Gi
+    source:
+      contextDir: /
+      git:
+        ref: "${GERRIT_REPOSITORY_REF}"
+        uri: ${GERRIT_REPOSITORY_URL}
+      type: Git
+    strategy:
+      dockerStrategy:
+        env:
+        - name: DO_UPGRADE
+          value: foo
+        forcePull: false
+      type: Docker
+    successfulBuildsHistoryLimit: 2
+    triggers:
+    - type: ConfigChange
+    - type: ImageChange
+parameters:
+- name: FRONTNAME
+  description: The name identifier assigned to objects defined in this template
+  displayName: Name
+  required: true
+  value: demo
+- name: GERRIT_REPOSITORY_REF
+  description: Set this to a branch name, tag or other ref of your repository if you are not using the default branch
+  displayName: Git Reference
+  required: true
+  value: master
+- name: GERRIT_REPOSITORY_URL
+  description: The URL of the repository with your Gerrit Dockerfile
+  displayName: Git Repository URL
+  required: true
+  value: https://github.com/faust64/docker-gerrit.git

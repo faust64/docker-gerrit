@@ -1,0 +1,289 @@
+apiVersion: v1
+kind: Template
+labels:
+  app: gerrit
+  template: gerrit-slave
+metadata:
+  annotations:
+    description: Gerrit Slave - persistent
+      see https://github.com/faust64/docker-gerrit
+    iconClass: icon-openshift
+    openshift.io/display-name: Gerrit Slave
+    tags: gerrit
+  name: gerrit-slave
+objects:
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      name: gerrit-slave-${FRONTNAME}
+    name: gerrit-slave-${FRONTNAME}
+  spec:
+    replicas: 1
+    selector:
+      name: gerrit-slave-${FRONTNAME}
+    strategy:
+      type: Recreate
+    template:
+      metadata:
+        labels:
+          name: gerrit-slave-${FRONTNAME}
+      spec:
+        dnsPolicy: ClusterFirst
+        containers:
+        - env:
+          - name: GERRIT_BEHIND_PROXY
+            value: yay
+          - name: GERRIT_HOSTNAME
+            value: gerrit-slave.${ROOT_DOMAIN}
+          - name: GERRIT_IS_SLAVE
+            value: yay
+          - name: GERRIT_PUBLIC_PROTO
+            value: https
+          - name: DB_DRIVER
+            value: mysql
+          - name: MYSQL_DATABASE
+            valueFrom:
+              secretKeyRef:
+                name: gerrit-${FRONTNAME}
+                key: database-name
+          - name: MYSQL_HOST
+            valueFrom:
+              secretKeyRef:
+                name: gerrit-${FRONTNAME}
+                key: database-host
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: gerrit-${FRONTNAME}
+                key: database-password
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                name: gerrit-${FRONTNAME}
+                key: database-user
+          image: ' '
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 19
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            successThreshold: 1
+            tcpSocket:
+              port: 8080
+            timeoutSeconds: 3
+          name: gerrit
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          - containerPort: 29418
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 5
+            initialDelaySeconds: 60
+            periodSeconds: 60
+            successThreshold: 1
+            tcpSocket:
+              port: 8080
+            timeoutSeconds: 3
+          resources:
+            limits:
+              cpu: "${GERRIT_CPU_LIMIT}"
+              memory: "${GERRIT_MEMORY_LIMIT}"
+          volumeMounts:
+          - name: data
+            mountPath: /var/gerrit/data
+            subPath: data
+          - name: data
+            mountPath: /var/gerrit/cache
+            subPath: cache
+          - name: data
+            mountPath: /var/gerrit/db
+            subPath: db
+          - name: data
+            mountPath: /var/gerrit/etc
+            subPath: etc
+          - name: data
+            mountPath: /var/gerrit/git
+            subPath: git
+          - name: data
+            mountPath: /var/gerrit/index
+            subPath: index
+          - name: data
+            mountPath: /var/gerrit/lib
+            subPath: lib
+          - name: data
+            mountPath: /var/gerrit/plugins
+            subPath: plugins
+          - name: data
+            mountPath: /var/gerrit/tmp
+            subPath: tmp
+          - name: sshkey
+            mountPath: /.ssh/id_rsa.pub
+            subPath: public-key
+          - name: sshkey
+            mountPath: /.ssh/id_rsa
+            subPath: private-key
+        - env:
+          - name: HOSTKEY_SOURCE
+            value: /etc/ssh
+          - name: HOSTKEY_TARGET
+            value: /var/gerrit/etc
+          - name: MY_HOME
+            value: /var/gerrit/git
+          - name: SSH_USERNAME
+            value: "admin"
+          - name: SSHD_PORT
+            value: "29419"
+          - name: SSHD_TMPDIR
+            value: /var/gerrit/tmp
+          image: ' '
+          imagePullPolicy: IfNotPresent
+          name: sshd
+          ports:
+          - containerPort: 29419
+            protocol: TCP
+          resources:
+            limits:
+              cpu: "${GERRIT_SSHD_CPU_LIMIT}"
+              memory: "${GERRIT_SSHD_MEMORY_LIMIT}"
+          volumeMounts:
+          - name: data
+            mountPath: /var/gerrit/git
+            subPath: git
+          - name: data
+            mountPath: /var/gerrit/etc
+            subPath: etc
+          - name: data
+            mountPath: /var/gerrit/tmp
+            subPath: tmpsshd
+          - name: sshkey
+            mountPath: /.ssh/id_rsa.pub
+            subPath: public-key
+        restartPolicy: Always
+        volumes:
+        - emptyDir: {}
+          name: data
+        - name: sshkey
+          secret:
+            secretName: gerrit-ssh-${FRONTNAME}
+    triggers:
+    - type: ImageChange
+      imageChangeParams:
+        automatic: true
+        containerNames:
+        - gerrit
+        from:
+          kind: ImageStreamTag
+          name: gerrit-${GERRIT_IMAGE_FRONTNAME}:${GERRIT_IMAGE_TAG}
+        lastTriggeredImage: ''
+    - type: ImageChange
+      imageChangeParams:
+        automatic: true
+        containerNames:
+        - sshd
+        from:
+          kind: ImageStreamTag
+          name: sshd-${SSHD_IMAGE_FRONTNAME}:${SSHD_IMAGE_TAG}
+        lastTriggeredImage: ''
+    - type: ConfigChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      description: Exposes Gerrit Services
+    name: gerrit-slave-${FRONTNAME}
+  spec:
+    ports:
+    - name: ssh-alt
+      port: 22
+      targetPort: 29418
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: ssh
+      port: 29418
+      targetPort: 29418
+    - name: sshd
+      port: 29419
+      targetPort: 29419
+    selector:
+      name: gerrit-slave-${FRONTNAME}
+    type: NodePort
+- apiVersion: v1
+  kind: Route
+  metadata:
+    annotations:
+      haproxy.router.openshift.io/timeout: 3m
+    name: gerrit-slave-${FRONTNAME}
+  spec:
+    host: gerrit-slave.${ROOT_DOMAIN}
+    port:
+      targetPort: 8080
+    to:
+      kind: Service
+      name: gerrit-slave-${FRONTNAME}
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: edge
+parameters:
+- name: FRONTNAME
+  description: The name identifier assigned to objects defined in this template
+  displayName: Name
+  required: true
+  value: demo
+- name: GERRIT_CPU_LIMIT
+  description: Maximum amount of CPU a Gerrit container can use
+  displayName: Gerrit CPU Limit
+  required: true
+  value: 300m
+- name: GERRIT_IMAGE_FRONTNAME
+  description: The name assigned to ImageStream object defined in corresponding template
+  displayName: Gerrit ImageStrem Name
+  required: true
+  value: demo
+- name: GERRIT_IMAGE_TAG
+  description: The ImageStreamTag we should pull images from
+  displayName: Gerrit ImageStream Tag
+  required: true
+  value: master
+- name: GERRIT_MEMORY_LIMIT
+  description: Maximum amount of memory a Gerrit container can use
+  displayName: Gerrit Memory Limit
+  required: true
+  value: 2048Mi
+- name: GERRIT_SSHD_CPU_LIMIT
+  description: Maximum amount of CPU a Gerrit SSHD container can use
+  displayName: Gerrit SSHD CPU Limit
+  required: true
+  value: 100m
+- name: GERRIT_SSHD_MEMORY_LIMIT
+  description: Maximum amount of memory a Gerrit SSHD container can use
+  displayName: Gerrit SSHD Memory Limit
+  required: true
+  value: 128Mi
+- name: GERRIT_VOLUME_CAPACITY
+  description: Volume space available for Gerrit site data, e.g. 512Mi, 2Gi.
+  displayName: Gerrit Volume Capacity
+  required: true
+  value: 32Gi
+- name: SSHD_IMAGE_FRONTNAME
+  description: The name assigned to ImageStream object defined in corresponding template
+  displayName: SSHD ImageStream Name
+  required: true
+  value: demo
+- name: SSHD_IMAGE_TAG
+  description: The ImageStreamTag we should pull images from
+  displayName: SSHD ImageStream Tag
+  required: true
+  value: master
+- name: ROOT_DOMAIN
+  description: Root Domain
+  displayName: Root Domain
+  required: true
+  value: demo.local
+- name: SMTP_RELAY
+  description: SMTP Relay
+  displayName: SMTP Relay
+  required: true
+  value: smtp.demo.local
