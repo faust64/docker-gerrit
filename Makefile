@@ -1,5 +1,8 @@
 FRONTNAME = demo
 ROOT_DOMAIN = example.com
+SKIP_SQUASH?=1
+
+-include Makefile.cust
 
 .PHONY: genkey
 genkey:
@@ -21,7 +24,11 @@ ockey: genkey occheck
 
 .PHONY: build
 build:
-	@@./hack/build.sh
+	SKIP_SQUASH=$(SKIP_SQUASH) ./hack/build.sh
+
+.PHONY: run
+run:
+	docker run -e DEBUG=yay -p8080:8080 -p29418:29148 ci/gerrit
 
 .PHONY: ocbuild
 ocbuild: occheck

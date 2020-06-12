@@ -1,6 +1,9 @@
-FROM debian:stretch-slim
+FROM debian:buster-slim
 
 # Gerrit for OpenShift Origin
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    GERRITVERSION=3.2.1-1
 
 LABEL io.k8s.description="Gerrit." \
       io.k8s.display-name="Gerrit" \
@@ -9,10 +12,7 @@ LABEL io.k8s.description="Gerrit." \
       io.openshift.non-scalable="true" \
       help="For more information visit https://github.com/faust64/docker-gerrit" \
       maintainer="Samuel MARTIN MORO <faut64@gmail.com>" \
-      version="2.16.12"
-
-ENV DEBIAN_FRONTEND=noninteractive \
-    GERRITVERSION=2.16.12-1
+      version="${GERRITVERSION}"
 
 RUN set -x \
     && apt-get update \
@@ -20,19 +20,18 @@ RUN set -x \
     && if test "$DO_UPGRADE"; then \
 	apt-get -y upgrade; \
     fi \
-    && apt-get -y install openjdk-8-jdk wget libnss-wrapper gnupg netcat \
+    && apt-get -y install openjdk-11-jdk wget libnss-wrapper gnupg netcat \
 	apt-transport-https ca-certificates sudo dumb-init \
-    && ( \
-	echo deb http://deb.gerritforge.com/ gerrit contrib \
-	&& echo "#deb https://dl.bintray.com/gerrit/deb/ gerrit contrib" \
-    ) > /etc/apt/sources.list.d/GerritForge.list \
-    && apt-get update --allow-unauthenticated \
-    && apt-get -y install --allow-unauthenticated gerrit=${GERRITVERSION} \
-	gitweb \
+    && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 847005AE619067D5 \
+    && echo deb http://bionic.gerritforge.com/ gerrit contrib \
+	>/etc/apt/sources.list.d/GerritForge.list \
+    && apt-get update \
+    && apt-get -y install gerrit=${GERRITVERSION} gitweb \
     && SUDO_FORCE_REMOVE=yes apt-get remove --purge -y gnupg \
 	apt-transport-https sudo \
     && apt-get autoremove --purge -y \
     && apt-get clean \
+    && mv /var/gerrit/etc/gerrit.config /var/gerrit/etc/gerrit.config.sample \
     && for d in etc lib plugins; do \
 	mv /var/gerrit/$d /var/gerrit/$d.orig; \
     done \

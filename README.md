@@ -173,43 +173,45 @@ Environment variables and volumes
 The image recognizes the following environment variables that you can set during
 initialization by passing `-e VAR=VALUE` to the Docker `run` command.
 
-|    Variable name                      |    Description                                | Default                               |
-| :------------------------------------ | --------------------------------------------- | ------------------------------------- |
-|  `DB_DRIVER`                          | Gerrit Database Driver                        | `h2`                                  |
-|  `FORCE_REINDEX`                      | Force Gerrit Reindex on boot                  | undef                                 |
-|  `GERRIT_AUTH_METHOD`                 | Gerrit Authentication Method                  | `DEVELOPMENT_BECOME_ANY_ACCOUNT`      |
-|  `GERRIT_BEHIND_PROXY`                | Gerrit is Behind an HTTP Proxy                | undef                                 |
-|  `GERRIT_MASTER`                      | OpenLDAP CodiMD Password                      | `secret`                              |
-|  `GERRIT_HOSTNAME`                    | Gerrit Service Hostname                       | `gerrit.demo.local`                   |
-|  `GERRIT_PUBLIC_PROTO`                | Gerrit Public Web Proto                       | `http`                                |
-|  `GERRIT_STRICT_HOSTKEY_CHECKING`     | Gerrit SSH Hostkey Strict Checking            | `true`                                |
-|  `GIT_USERNAME`                       | Git Default Username                          | `gitusr`                              |
-|  `HTTP_LISTEN_PORT`                   | Gerrit JVM HTTP Listen Port                   | `8080`                                |
-|  `LDAP_ACCOUNT_SCOPE`                 | LDAP Account Search Scope                     | `one`                                 |
-|  `LDAP_BASE`                          | LDAP Search Base                              | `dc=demo,dc=local`                    |
-|  `LDAP_BIND_DN_PREFIX`                | Gerrit LDAP Bind DN Prefix                    | `cn=gerrit,ou=services`               |
-|  `LDAP_BIND_PASSWORD`                 | Gerrit LDAP Bind Password                     | `secret`                              |
-|  `LDAP_DN_ATTR`                       | LDAP DisplayName Attribute                    | `displayName`                         |
-|  `LDAP_EMAIL_ATTR`                    | LDAP Email Attribute                          | `mail`                                |
-|  `LDAP_HOST`                          | LDAP Host Address                             | `openldap`                            |
-|  `LDAP_PROTO`                         | LDAP Proto                                    | `ldap`                                |
-|  `LDAP_SSL_VERIFY`                    | LDAP SSL Verify                               | `true`                                |
-|  `LDAP_START_TLS`                     | LDAP Start TLS                                | `false`                               |
-|  `MYSQL_DATABASE`                     | Gerrit MySQL Database Name                    | `gerrit`                              |
-|  `MYSQL_HOST`                         | Gerrit MySQL Host Address                     | `mysql`                               |
-|  `MYSQL_PASSWORD`                     | Gerrit MySQL Database Password                | `secret`                              |
-|  `MYSQL_USER`                         | Gerrit MySQL Database Username                | `mysql`                               |
-|  `POSTGRES_DATABASE`                  | Gerrit Postgres Database Name                 | `gerrit`                              |
-|  `POSTGRES_HOST`                      | Gerrit Postgres Host Address                  | `postgres`                            |
-|  `POSTGRES_PASSWORD`                  | Gerrit Postgres Database Password             | `secret`                              |
-|  `POSTGRES_USER`                      | Gerrit Postgres Database Username             | `postgres`                            |
-|  `SMTP_DOMAIN`                        | Gerrit Mail Domain                            | `demo.local`                          |
-|  `SMTP_HOST`                          | Gerrit SMTP Relay                             | `smtp.demo.local`                     |
-|  `SSH_LISTEN_PORT`                    | Gerrit SSHD Server Listen Port                | `29418`                               |
-|  `SSH_IDLE_TIMEOUT`                   | Gerrit SSHD Server IDLE Timeout               | `240m`                                |
-|  `SSH_THREADS`                        | Gerrit SSHD Server Threads                    | `8`                                   |
-|  `SSH_MAX_CON_PER_USER`               | Gerrit SSHD Server Max Connections per User   | `0`                                   |
-|  `SSHD_LISTEN_PORT`                   | OpenSSH Replication SSHD Server Listen Port   | `29419`                               |
+|    Variable name                      |    Description                                | Default                                     |
+| :------------------------------------ | --------------------------------------------- | ------------------------------------------- |
+|  `ALLOWED_DOWNLOAD_SCHEMES`           | Gerrit Allowed Download Schemes               | `ssh http anon_http anon_git repo_download` |
+|  `DB_DRIVER`                          | Gerrit Database Driver                        | `h2`                                        |
+|  `FORCE_REINDEX`                      | Force Gerrit Reindex on boot                  | undef                                       |
+|  `GERRIT_AUTH_METHOD`                 | Gerrit Authentication Method                  | `DEVELOPMENT_BECOME_ANY_ACCOUNT`            |
+|  `GERRIT_BEHIND_PROXY`                | Gerrit is Behind an HTTP Proxy                | undef                                       |
+|  `GERRIT_MASTER`                      | OpenLDAP CodiMD Password                      | `secret`                                    |
+|  `GERRIT_HOSTNAME`                    | Gerrit Service Hostname                       | `gerrit.demo.local`                         |
+|  `GERRIT_PACKED_GIT_LIMIT`            | Packed Git Size Limit                         | `500m`                                      |
+|  `GERRIT_PUBLIC_PROTO`                | Gerrit Public Web Proto                       | `http`                                      |
+|  `GERRIT_STRICT_HOSTKEY_CHECKING`     | Gerrit SSH Hostkey Strict Checking            | `true`                                      |
+|  `GIT_USERNAME`                       | Git Default Username                          | `gitusr`                                    |
+|  `HTTP_LISTEN_PORT`                   | Gerrit JVM HTTP Listen Port                   | `8080`                                      |
+|  `LDAP_ACCOUNT_SCOPE`                 | LDAP Account Search Scope                     | `one`                                       |
+|  `LDAP_BASE`                          | LDAP Search Base                              | `dc=demo,dc=local`                          |
+|  `LDAP_BIND_DN_PREFIX`                | Gerrit LDAP Bind DN Prefix                    | `cn=gerrit,ou=services`                     |
+|  `LDAP_BIND_PASSWORD`                 | Gerrit LDAP Bind Password                     | `secret`                                    |
+|  `LDAP_DN_ATTR`                       | LDAP DisplayName Attribute                    | `displayName`                               |
+|  `LDAP_EMAIL_ATTR`                    | LDAP Email Attribute                          | `mail`                                      |
+|  `LDAP_HOST`                          | LDAP Host Address                             | `openldap`                                  |
+|  `LDAP_PROTO`                         | LDAP Proto                                    | `ldap`                                      |
+|  `LDAP_SSL_VERIFY`                    | LDAP SSL Verify                               | `true`                                      |
+|  `LDAP_START_TLS`                     | LDAP Start TLS                                | `false`                                     |
+|  `MYSQL_DATABASE`                     | Gerrit MySQL Database Name                    | `gerrit`                                    |
+|  `MYSQL_HOST`                         | Gerrit MySQL Host Address                     | `mysql`                                     |
+|  `MYSQL_PASSWORD`                     | Gerrit MySQL Database Password                | `secret`                                    |
+|  `MYSQL_USER`                         | Gerrit MySQL Database Username                | `mysql`                                     |
+|  `POSTGRES_DATABASE`                  | Gerrit Postgres Database Name                 | `gerrit`                                    |
+|  `POSTGRES_HOST`                      | Gerrit Postgres Host Address                  | `postgres`                                  |
+|  `POSTGRES_PASSWORD`                  | Gerrit Postgres Database Password             | `secret`                                    |
+|  `POSTGRES_USER`                      | Gerrit Postgres Database Username             | `postgres`                                  |
+|  `SMTP_DOMAIN`                        | Gerrit Mail Domain                            | `demo.local`                                |
+|  `SMTP_HOST`                          | Gerrit SMTP Relay                             | `smtp.demo.local`                           |
+|  `SSH_LISTEN_PORT`                    | Gerrit SSHD Server Listen Port                | `29418`                                     |
+|  `SSH_IDLE_TIMEOUT`                   | Gerrit SSHD Server IDLE Timeout               | `240m`                                      |
+|  `SSH_THREADS`                        | Gerrit SSHD Server Threads                    | `8`                                         |
+|  `SSH_MAX_CON_PER_USER`               | Gerrit SSHD Server Max Connections per User   | `0`                                         |
+|  `SSHD_LISTEN_PORT`                   | OpenSSH Replication SSHD Server Listen Port   | `29419`                                     |
 
 You can also set the following mount points by passing the `-v /host:/container` flag to Docker.
 

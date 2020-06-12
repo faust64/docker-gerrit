@@ -10,6 +10,7 @@ GERRIT_AUTH_METHOD=${GERRIT_AUTH_METHOD:-DEVELOPMENT_BECOME_ANY_ACCOUNT}
 GERRIT_BEHIND_PROXY=${GERRIT_BEHIND_PROXY:-}
 GERRIT_MASTER=${GERRIT_MASTER:-}
 GERRIT_HOSTNAME=${GERRIT_HOSTNAME:-gerrit.demo.local}
+GERRIT_PACKED_GIT_LIMIT=${GERRIT_PACKED_GIT_LIMIT:-500m}
 GERRIT_PUBLIC_PROTO=${GERRIT_PUBLIC_PROTO:-http}
 GERRIT_STRICT_HOSTKEY_CHECKING=${GERRIT_STRICT_HOSTKEY_CHECKING:-true}
 GIT_USERNAME=${GIT_USERNAME:-gitusr}
@@ -56,6 +57,9 @@ if test -z "$LDAP_PORT"; then
 	LDAP_PORT=389
     fi
 fi
+if test -z "$ALLOWED_DOWNLOAD_SCHEMES"; then
+    ALLOWED_DOWNLOAD_SCHEMES="ssh http anon_http anon_git repo_download"
+fi
 if test -z "$GERRIT_SERVER_ID"; then
     GERRIT_SERVER_ID=cef467b6-2cbc-42d4-b21e-e4c29d1df424
 fi
@@ -84,11 +88,16 @@ gerrit_refresh_config()
 	basePath = git
 	serverId = $GERRIT_SERVER_ID
 	canonicalWebUrl = $GERRIT_PUBLIC_PROTO://$GERRIT_HOSTNAME/
+[core]
+	packedGitLimit = $GERRIT_PACKED_GIT_LIMIT
 [index]
 	type = LUCENE
 [sendemail]
+	enable = true
 	smtpServer = $SMTP_HOST
+	sslVerify = false
 [sshd]
+	advertisedAddress = $GERRIT_HOSTNAME:$SSH_LISTEN_PORT
 	listenAddress = *:$SSH_LISTEN_PORT
 	threads = $SSH_THREADS
 	idleTimeout = $SSH_IDLE_TIMEOUT
@@ -96,7 +105,7 @@ gerrit_refresh_config()
 [httpd]
 	listenUrl = $LISTEN_PROTO://*:$HTTP_LISTEN_PORT
 [cache]
-	directory = cache
+	directory = /var/gerrit/cache
 [cache "web_sessions"]
 	maxAge = 5d
 [cache "ldap_groups"]
@@ -109,19 +118,16 @@ gerrit_refresh_config()
 	maxAge = 60
 [cache "groups_members"]
 	maxAge = 60
-[download]
-	scheme = ssh
-[hooks]
-	path = /var/gerrit/hooks
 [noteDB "changes"]
 	automigrate = true
 [plugins]
 	allowRemoteAdmin = true
 [container]
-	javaHome = /usr/lib/jvm/java-8-openjdk-amd64/jre
+	javaHome = /usr/lib/jvm/java-11-openjdk-amd64
 	javaOptions = "-Dflogger.backend_factory=com.google.common.flogger.backend.log4j.Log4jBackendFactory#getInstance"
 	javaOptions = "-Dflogger.logging_context=com.google.gerrit.server.logging.LoggingContext#getInstance"
 	javaOptions = -Djava.security.egd=file:/dev/urandom
+	startupTimeout = 180
 	user = gerrit
 EOF
     if test "$GERRIT_HEAP_LIMIT"; then
@@ -142,7 +148,12 @@ EOF
 	type = $GERRIT_AUTH_METHOD
 [gitweb]
 	cgi = /usr/lib/cgi-bin/gitweb.cgi
+[download]
 EOF
+    for scheme in $ALLOWED_DOWNLOAD_SCHEMES
+    do
+	echo "	scheme = $scheme"
+    done >>/var/gerrit/etc/gerrit.config
     if test "$GERRIT_AUTH_METHOD" = LDAP; then
 	cat <<EOF >>/var/gerrit/etc/gerrit.config
 [ldap]
@@ -162,55 +173,14 @@ EOF
     fi
     if test "$DB_DRIVER" = mysql; then
 	cat <<EOF
-[database]
-	database = $MYSQL_DATABASE
-	hostname = $MYSQL_HOST
-	password = $MYSQL_PASSWORD
-	username = $MYSQL_USER
-	type = mysql
+[accountPatchReviewDb]
+	url = jdbc:mysql://$MYSQL_HOST:3306/$MYSQL_DATABASE?user=$MYSQL_USER&password=$MYSQL_PASSWORD
 EOF
-	if test "$GERRIT_VERIFY_STATUS_PLUGIN"; then
-	    cat <<EOF
-[plugin "verify-status"]
-	database = $MYSQL_DATABASE
-	dbType = mysql
-	hostname = $MYSQL_HOST
-	password = $MYSQL_PASSWORD
-	username = $MYSQL_USER
-EOF
-	fi
     elif test "$DB_DRIVER" = postgres -o "$DB_DRIVER" = postgresql; then
 	cat <<EOF
-[database]
-	database = $POSTGRES_DATABASE
-	hostname = $POSTGRES_HOST
-	password = $POSTGRES_PASSWORD
-	username = $POSTGRES_USER
-	type = postgresql
+[accountPatchReviewDb]
+	url = jdbc:postgresql://$POSTGRES_HOST:5432/$POSTGRES_DATABASE?user=$POSTGRES_USER&password=$POSTGRES_PASSWORD
 EOF
-	if test "$GERRIT_VERIFY_STATUS_PLUGIN"; then
-	    cat <<EOF
-[plugin "verify-status"]
-	database = $POSTGRES_DATABASE
-	dbType = postgresql
-	hostname = $POSTGRES_HOST
-	password = $POSTGRES_PASSWORD
-	username = $POSTGRES_USER
-EOF
-	fi
-    else
-	cat <<EOF
-[database]
-	database = db/ReviewDB
-	dbType = h2
-EOF
-	if test "$GERRIT_VERIFY_STATUS_PLUGIN"; then
-	    cat <<EOF
-[plugin "verify-status"]
-	database = db/VerifyStatusDB
-	dbType = h2
-EOF
-	fi
     fi >>/var/gerrit/etc/gerrit.config
 }
 
@@ -461,7 +431,7 @@ if ! test -s /var/gerrit/.gitconfig; then
 	email = $GIT_USERNAME@$SMTP_DOMAIN
 	name = $GIT_USERNAME
 [core]
-    packedGitLimit = 32G
+    packedGitLimit = $GERRIT_PACKED_GIT_LIMIT
 EOF
     for review in $GERRIT_REVIEW_HOSTS
     do
@@ -478,6 +448,9 @@ do
     ln -sf /dev/stdout /var/gerrit/logs/${log}_log
 done
 
+if test "$DEBUG"; then
+    cat /var/gerrit/etc/gerrit.config
+fi
 unset cpt MYSQL_HOST MYSQL_USER MYSQL_PASSWORD MYSQL_DATABASE pwentry NOW \
     SSH_LISTEN_PORT HTTP_LISTEN_PORT SMTP_HOST GERRIT_PUBLIC_PROTO LDAP_PORT \
     GERRIT_HOSTNAME POSTGRES_HOST POSTGRES_USER POSTGRES_PASSWORD LDAP_BASE \
